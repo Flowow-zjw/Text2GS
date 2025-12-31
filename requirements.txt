@@ -1,0 +1,46 @@
+# Text2GS Requirements
+# Python 3.10, CUDA 11.8
+
+# ============ Core ============
+numpy==1.23.5
+einops==0.6.1
+omegaconf==2.3.0
+pyyaml==6.0
+tqdm==4.65.0
+
+# ============ PyTorch ============
+# Install separately:
+# pip install torch==2.0.1 torchvision==0.15.2 --index-url https://download.pytorch.org/whl/cu118
+torch>=2.0.0
+torchvision>=0.15.0
+
+# ============ Diffusion ============
+diffusers==0.16.1
+transformers==4.28.1
+xformers
+open-clip-torch==2.17.1
+timm==0.6.13
+
+# ============ Deep Learning ============
+pytorch-lightning==1.9.3
+accelerate
+
+# ============ Image/Video ============
+opencv-python==4.7.0.72
+Pillow==9.4.0
+imageio==2.27.0
+imageio-ffmpeg==0.4.8
+av==10.0.0
+decord==0.6.0
+
+# ============ 3D ============
+trimesh==4.4.3
+roma==1.5.0
+kornia
+# pytorch3d - install separately
+
+# ============ Scientific ============
+scipy==1.9.1
+scikit-image==0.20.0
+scikit-learn==1.2.2
+matplotlib==3.9.2

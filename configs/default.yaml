@@ -1,0 +1,54 @@
+# Text2GS Default Configuration
+
+# Device
+device: "cuda:0"
+
+# Output directory
+output_dir: "./output"
+
+# Memory optimization
+unload_between_stages: false
+
+# External paths (relative to project root)
+paths:
+  mvdiffusion_path: "./extern/MVDiffusion"
+  viewcrafter_path: "./extern/ViewCrafter"
+  dust3r_path: "./extern/dust3r"
+
+# Stage 1: MVDiffusion
+mvdiffusion:
+  num_views: 8
+  resolution: 512
+  fov: 90
+  guidance_scale: 9.0
+  diff_timesteps: 50
+  checkpoint: "./checkpoints/mvdiffusion/pano.ckpt"
+
+# Stage 2: Point Cloud (DUSt3R)
+pointcloud:
+  batch_size: 1
+  niter: 300
+  lr: 0.01
+  schedule: "linear"
+  min_conf_thr: 3.0
+  checkpoint: "./checkpoints/dust3r/DUSt3R_ViTLarge_BaseDecoder_512_dpt.pth"
+
+# Stage 3: ViewCrafter
+viewcrafter:
+  num_iterations: 3
+  video_length: 25
+  ddim_steps: 50
+  guidance_scale: 7.5
+  sample_rate: 6
+  theta_range: [-15, 15]
+  phi_range: [-45, 45]
+  # Use sparse model for multi-view input (MVDiffusion outputs 8 views)
+  checkpoint: "./checkpoints/viewcrafter/model_sparse.ckpt"
+  dust3r_checkpoint: "./checkpoints/dust3r/DUSt3R_ViTLarge_BaseDecoder_512_dpt.pth"
+  config: "./extern/ViewCrafter/configs/inference_pvd_1024.yaml"
+  bg_trd: 0.2  # Background threshold for cleaner point cloud
+
+# Stage 4: 3D Gaussian Splatting
+gaussian:
+  iterations: 2000
+  export_only: true  # Set to false to train 3D-GS directly

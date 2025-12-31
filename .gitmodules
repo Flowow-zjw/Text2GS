@@ -1,0 +1,11 @@
+[submodule "extern/MVDiffusion"]
+    path = extern/MVDiffusion
+    url = https://github.com/Tangshitao/MVDiffusion.git
+
+[submodule "extern/ViewCrafter"]
+    path = extern/ViewCrafter
+    url = https://github.com/Drexubery/ViewCrafter.git
+
+[submodule "extern/dust3r"]
+    path = extern/dust3r
+    url = https://github.com/naver/dust3r.git
