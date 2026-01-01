@@ -1,46 +1,88 @@
 # Text2GS Requirements
-# Python 3.10, CUDA 11.8
+# Python 3.10, CUDA 12.8
+
+# ============ PyTorch (锁定版本，需先安装) ============
+# pip install torch==2.7.1+cu128 torchvision==0.22.1+cu128 torchaudio==2.7.1+cu128 --index-url https://download.pytorch.org/whl/cu128
+--extra-index-url https://download.pytorch.org/whl/cu128
+
 
 # ============ Core ============
-numpy==1.23.5
+numpy==2.0.0
 einops==0.6.1
 omegaconf==2.3.0
-pyyaml==6.0
-tqdm==4.65.0
-
-# ============ PyTorch ============
-# Install separately:
-# pip install torch==2.0.1 torchvision==0.15.2 --index-url https://download.pytorch.org/whl/cu118
-torch>=2.0.0
-torchvision>=0.15.0
+pyyaml==6.0.3
+tqdm==4.67.1
 
 # ============ Diffusion ============
 diffusers==0.16.1
-transformers==4.28.1
-xformers
+transformers==4.30.2
+xformers==0.0.30
 open-clip-torch==2.17.1
-timm==0.6.13
+timm==0.9.12
 
 # ============ Deep Learning ============
 pytorch-lightning==1.9.3
-accelerate
+accelerate==0.21.0
 
 # ============ Image/Video ============
-opencv-python==4.7.0.72
-Pillow==9.4.0
-imageio==2.27.0
-imageio-ffmpeg==0.4.8
-av==10.0.0
+opencv-python==4.12.0.88
+Pillow==10.4.0
+imageio==2.37.2
+imageio-ffmpeg==0.6.0
+av==16.0.1
 decord==0.6.0
 
 # ============ 3D ============
-trimesh==4.4.3
-roma==1.5.0
-kornia
-# pytorch3d - install separately
+trimesh==4.10.1
+roma==1.5.4
+kornia==0.8.2
+# pytorch3d==0.7.9 - 需单独安装
 
 # ============ Scientific ============
-scipy==1.9.1
-scikit-image==0.20.0
-scikit-learn==1.2.2
-matplotlib==3.9.2
+scipy==1.15.3
+scikit-learn==1.7.2
+matplotlib==3.10.8
+
+# ============ Additional ============
+safetensors==0.7.0
+huggingface-hub==0.22.0
+gradio==3.50.2
+plyfile==1.1.3
+lpips==0.1.4
+modelscope==1.33.0
+
+# ============ Git 子模块 (需手动克隆) ============
+# MVDiffusion:
+#   git clone https://github.com/Tangshitao/MVDiffusion.git ./extern/MVDiffusion
+#
+# ViewCrafter:
+#   git clone https://github.com/Drexubery/ViewCrafter.git ./extern/ViewCrafter
+
+# ============ 模型下载 ============
+# 下载位置: ./checkpoints/
+#
+# --- MVDiffusion 模型 ---
+# 1. Stable Diffusion 2 Base (必需):
+#    HuggingFace: stabilityai/stable-diffusion-2-base (自动下载)
+#    或手动下载到: ./checkpoints/stable-diffusion-2-base/
+#
+# 2. MVDiffusion Panorama 权重 (必需):
+#    下载链接: https://www.dropbox.com/scl/fi/yx9e0lj4fwtm9xh2wlhhg/pano.ckpt?rlkey=kowqygw7vt64r3maijk8klfl0&dl=0
+#    保存到: ./checkpoints/mvdiffusion/pano.ckpt
+#
+# 3. MVDiffusion Panorama Outpaint 权重 (可选):
+#    下载链接: https://www.dropbox.com/scl/fi/3mtj06qx6mxt4eme1oz2r/pano_outpaint.ckpt?rlkey=xat6cwt47lzfjawum05xa5ftq&dl=0
+#    保存到: ./checkpoints/mvdiffusion/pano_outpaint.ckpt
+#
+# --- ViewCrafter 模型 ---
+# 1. ViewCrafter_25_sparse 权重 (必需):
+#    下载链接: https://huggingface.co/Drexubery/ViewCrafter_25_sparse/resolve/main/model_sparse.ckpt
+#    保存到: ./checkpoints/viewcrafter/model_sparse.ckpt
+#
+# 2. DUSt3R 权重 (必需):
+#    下载链接: https://download.europe.naverlabs.com/ComputerVision/DUSt3R/DUSt3R_ViTLarge_BaseDecoder_512_dpt.pth
+#    保存到: ./checkpoints/dust3r/DUSt3R_ViTLarge_BaseDecoder_512_dpt.pth
+#
+# --- 国内镜像下载 (ModelScope) ---
+# from modelscope import snapshot_download
+# snapshot_download('AI-ModelScope/stable-diffusion-2-base', cache_dir='./checkpoints')

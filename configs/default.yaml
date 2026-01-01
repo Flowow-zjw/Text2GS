@@ -35,18 +35,13 @@ pointcloud:
 
 # Stage 3: ViewCrafter
 viewcrafter:
-  num_iterations: 3
   video_length: 25
   ddim_steps: 50
   guidance_scale: 7.5
-  sample_rate: 6
-  theta_range: [-15, 15]
-  phi_range: [-45, 45]
-  # Use sparse model for multi-view input (MVDiffusion outputs 8 views)
+  min_conf_thr: 3.0
+  bg_trd: 0.2
   checkpoint: "./checkpoints/viewcrafter/model_sparse.ckpt"
-  dust3r_checkpoint: "./checkpoints/dust3r/DUSt3R_ViTLarge_BaseDecoder_512_dpt.pth"
   config: "./extern/ViewCrafter/configs/inference_pvd_1024.yaml"
-  bg_trd: 0.2  # Background threshold for cleaner point cloud
 
 # Stage 4: 3D Gaussian Splatting
 gaussian:
