@@ -71,6 +71,21 @@ def parse_args():
     parser.add_argument("--unload-between-stages", action="store_true",
                         help="Unload models between stages to save memory")
     
+    # Compression
+    parser.add_argument("--compress", action="store_true",
+                        help="Compress results after completion")
+    parser.add_argument("--compress-mode", type=str, default="minimal",
+                        choices=["minimal", "model", "full"],
+                        help="Compression mode: minimal (default), model, or full")
+    
+    # 3D-GS Training
+    parser.add_argument("--train-3dgs", action="store_true",
+                        help="Train 3D Gaussian Splatting after export")
+    parser.add_argument("--gs-iterations", type=int, default=None,
+                        help="3D-GS training iterations (overrides config)")
+    parser.add_argument("--gs-path", type=str, default=None,
+                        help="Path to gaussian-splatting installation")
+    
     return parser.parse_args()
 
 
@@ -114,8 +129,12 @@ def main():
                 "bg_trd": 0.2,
             },
             "gaussian": {
-                "iterations": 2000,
-                "export_only": True,
+                "iterations": 30000,
+                "export_only": False,
+                "test_iterations": [7000, 30000],
+                "save_iterations": [7000, 30000],
+                "checkpoint_iterations": [],
+                "gaussian_splatting_path": "/root/autodl-tmp/gaussian-splatting",
             },
         }
     
@@ -141,6 +160,19 @@ def main():
         config["viewcrafter"]["num_iterations"] = args.num_iterations
     
     config["unload_between_stages"] = args.unload_between_stages
+    
+    # Compression options
+    config["compress_results"] = args.compress
+    config["compress_mode"] = args.compress_mode
+    
+    # 3D-GS training options
+    if args.train_3dgs:
+        config["gaussian"]["export_only"] = False
+    if args.gs_iterations:
+        config["gaussian"]["iterations"] = args.gs_iterations
+    if args.gs_path:
+        config["paths"]["gaussian_splatting_path"] = args.gs_path
+        config["gaussian"]["gaussian_splatting_path"] = args.gs_path
     
     # Create and run pipeline
     pipeline = Text2GSPipeline(config)

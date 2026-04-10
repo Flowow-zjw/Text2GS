@@ -9,11 +9,12 @@ output_dir: "./output"
 # Memory optimization
 unload_between_stages: false
 
-# External paths (relative to project root)
+# External paths (absolute paths)
 paths:
-  mvdiffusion_path: "./extern/MVDiffusion"
-  viewcrafter_path: "./extern/ViewCrafter"
-  dust3r_path: "./extern/dust3r"
+  mvdiffusion_path: "/root/autodl-tmp/Text2GS/extern/MVDiffusion"
+  viewcrafter_path: "/root/autodl-tmp/Text2GS/extern/ViewCrafter"
+  dust3r_path: "/root/autodl-tmp/Text2GS/extern/dust3r"
+  gaussian_splatting_path: "/root/autodl-tmp/gaussian-splatting"
 
 # Stage 1: MVDiffusion
 mvdiffusion:
@@ -22,7 +23,7 @@ mvdiffusion:
   fov: 90
   guidance_scale: 9.0
   diff_timesteps: 50
-  checkpoint: "./checkpoints/mvdiffusion/pano.ckpt"
+  checkpoint: "/root/autodl-tmp/Text2GS/checkpoints/mvdiffusion/pano.ckpt"
 
 # Stage 2: Point Cloud (DUSt3R)
 pointcloud:
@@ -31,7 +32,7 @@ pointcloud:
   lr: 0.01
   schedule: "linear"
   min_conf_thr: 3.0
-  checkpoint: "./checkpoints/dust3r/DUSt3R_ViTLarge_BaseDecoder_512_dpt.pth"
+  checkpoint: "/root/autodl-tmp/Text2GS/checkpoints/dust3r/DUSt3R_ViTLarge_BaseDecoder_512_dpt.pth"
 
 # Stage 3: ViewCrafter
 viewcrafter:
@@ -40,10 +41,12 @@ viewcrafter:
   guidance_scale: 7.5
   min_conf_thr: 3.0
   bg_trd: 0.2
-  checkpoint: "./checkpoints/viewcrafter/model_sparse.ckpt"
-  config: "./extern/ViewCrafter/configs/inference_pvd_1024.yaml"
+  checkpoint: "/root/autodl-tmp/Text2GS/checkpoints/viewcrafter/model_sparse.ckpt"
+  config: "/root/autodl-tmp/Text2GS/extern/ViewCrafter/configs/inference_pvd_1024.yaml"
 
 # Stage 4: 3D Gaussian Splatting
 gaussian:
-  iterations: 2000
-  export_only: true  # Set to false to train 3D-GS directly
+  export_only: false  # Set to false to train 3D-GS directly
+  iterations: 7000
+  opacity_reset_interval: 100000  # 禁用透明度重置，避免删除有效点导致空洞
+  max_init_points: 500000  # 初始点云数量（从154万下采样到50万）

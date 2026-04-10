@@ -151,12 +151,71 @@ class Text2GSPipeline:
         })
         results["stage4"] = stage4_out
         
+        # Save Stage 4 metadata
+        if save_intermediate:
+            self._save_stage4(stage4_out)
+        
+        # Save pipeline summary
+        self._save_pipeline_summary(results)
+        
+        # Compress results if requested
+        if self.config.get("compress_results", False):
+            self._compress_results()
+        
         print("\n" + "=" * 60)
         print("Pipeline Complete!")
         print(f"Results saved to: {self.run_dir}")
         print("=" * 60)
         
         return results
+    
+    def _compress_results(self) -> None:
+        """Compress pipeline results"""
+        import tarfile
+        
+        compress_mode = self.config.get("compress_mode", "minimal")
+        
+        print(f"\n[Compression] Compressing results ({compress_mode} mode)...")
+        
+        archive_name = f"{os.path.basename(self.run_dir)}_{compress_mode}.tar.gz"
+        archive_path = os.path.join(os.path.dirname(self.run_dir), archive_name)
+        
+        try:
+            with tarfile.open(archive_path, "w:gz") as tar:
+                if compress_mode == "minimal":
+                    # 关键文件：训练模型 + Stage 1 + Stage 2 + 总结
+                    patterns = [
+                        "PIPELINE_SUMMARY.txt",
+                        "stage1_mvdiffusion",
+                        "stage2_pointcloud",
+                        "stage4_gaussian",
+                        "3dgs/output",
+                        "3dgs/training_logs/training_status.txt",
+                        "3dgs/metadata.json",
+                    ]
+                elif compress_mode == "model":
+                    # 仅模型
+                    patterns = ["3dgs/output"]
+                else:  # full
+                    # 完整目录
+                    tar.add(self.run_dir, arcname=os.path.basename(self.run_dir))
+                    print(f"  ✓ Compressed to: {archive_path}")
+                    return
+                
+                # 添加指定文件/目录
+                for pattern in patterns:
+                    path = os.path.join(self.run_dir, pattern)
+                    if os.path.exists(path):
+                        arcname = os.path.join(os.path.basename(self.run_dir), pattern)
+                        tar.add(path, arcname=arcname)
+                        print(f"  ✓ Added: {pattern}")
+            
+            # 显示压缩信息
+            size = os.path.getsize(archive_path) / (1024 * 1024)
+            print(f"  ✓ Compressed to: {archive_path} ({size:.1f} MB)")
+            
+        except Exception as e:
+            print(f"  ✗ Compression failed: {e}")
     
     def _save_stage1(self, data: Dict[str, Any]) -> None:
         """Save Stage 1 outputs: images, cameras, prompt"""
@@ -341,3 +400,199 @@ class Text2GSPipeline:
             json.dump(metadata, f, indent=2)
         
         print(f"  Saved {total_frames} frames (interval: {metadata['frame_interval_degrees']:.1f}°) to {stage_dir}")
+    
+    def _save_stage4(self, data: Dict[str, Any]) -> None:
+        """Save Stage 4 outputs: metadata and training info"""
+        stage_dir = os.path.join(self.run_dir, "stage4_gaussian")
+        os.makedirs(stage_dir, exist_ok=True)
+        
+        # Save metadata
+        metadata = {
+            "export_dir": data.get("export_dir"),
+            "colmap_dir": data.get("colmap_dir"),
+            "images_dir": data.get("images_dir"),
+            "num_images": data.get("num_images"),
+            "num_points": data.get("num_points"),
+            "training_enabled": "training" in data,
+        }
+        
+        # Add training info if available
+        if "training" in data:
+            training_info = data["training"]
+            metadata["training"] = {
+                "model_path": training_info.get("model_path"),
+                "iterations": training_info.get("iterations"),
+                "success": training_info.get("success"),
+                "log_file": training_info.get("log_file"),
+                "config_file": training_info.get("config_file"),
+                "status_file": training_info.get("status_file"),
+            }
+            metadata["trained_model_path"] = data.get("trained_model_path")
+        
+        with open(os.path.join(stage_dir, "metadata.json"), "w") as f:
+            json.dump(metadata, f, indent=2)
+        
+        # Create a summary text file
+        with open(os.path.join(stage_dir, "summary.txt"), "w", encoding="utf-8") as f:
+            f.write("Stage 4: 3D Gaussian Splatting\n")
+            f.write("=" * 60 + "\n\n")
+            f.write(f"Export Directory: {data.get('export_dir')}\n")
+            f.write(f"COLMAP Directory: {data.get('colmap_dir')}\n")
+            f.write(f"Images Directory: {data.get('images_dir')}\n")
+            f.write(f"Number of Images: {data.get('num_images')}\n")
+            f.write(f"Number of Points: {data.get('num_points')}\n\n")
+            
+            if "training" in data:
+                f.write("Training Information:\n")
+                f.write("-" * 60 + "\n")
+                training_info = data["training"]
+                f.write(f"Model Path: {training_info.get('model_path')}\n")
+                f.write(f"Iterations: {training_info.get('iterations')}\n")
+                f.write(f"Success: {training_info.get('success')}\n")
+                f.write(f"Log File: {training_info.get('log_file')}\n")
+                f.write(f"Config File: {training_info.get('config_file')}\n")
+                f.write(f"Status File: {training_info.get('status_file')}\n")
+                f.write(f"\nTrained Model: {data.get('trained_model_path')}\n")
+            else:
+                f.write("Training: Not performed (export only)\n")
+        
+        print(f"  Saved Stage 4 metadata to {stage_dir}")
+    
+    def _save_pipeline_summary(self, results: Dict[str, Any]) -> None:
+        """Save complete pipeline summary"""
+        summary_file = os.path.join(self.run_dir, "PIPELINE_SUMMARY.txt")
+        
+        with open(summary_file, "w", encoding="utf-8") as f:
+            f.write("=" * 80 + "\n")
+            f.write("TEXT2GS PIPELINE SUMMARY\n")
+            f.write("=" * 80 + "\n\n")
+            
+            # Basic info
+            f.write(f"Prompt: {results['prompt']}\n")
+            f.write(f"Output Directory: {results['output_dir']}\n")
+            f.write(f"Timestamp: {os.path.basename(self.run_dir)}\n\n")
+            
+            # Stage 1
+            f.write("-" * 80 + "\n")
+            f.write("STAGE 1: MVDiffusion - Multi-view Generation\n")
+            f.write("-" * 80 + "\n")
+            stage1 = results.get("stage1", {})
+            f.write(f"Number of Views: {len(stage1.get('images', []))}\n")
+            cameras = stage1.get("cameras", {})
+            f.write(f"Resolution: {cameras.get('resolution', 'N/A')}\n")
+            f.write(f"FOV: {cameras.get('fov', 'N/A')}°\n")
+            f.write(f"Output: stage1_mvdiffusion/\n\n")
+            
+            # Stage 2
+            f.write("-" * 80 + "\n")
+            f.write("STAGE 2: DUSt3R - Point Cloud Reconstruction\n")
+            f.write("-" * 80 + "\n")
+            stage2 = results.get("stage2", {})
+            pts3d = stage2.get("pts3d", [])
+            if pts3d:
+                total_points = sum(p.numel() // 3 for p in pts3d)
+                f.write(f"Total Points: {total_points:,}\n")
+            f.write(f"Number of Views: {len(stage2.get('images', []))}\n")
+            f.write(f"Output: stage2_pointcloud/\n")
+            f.write(f"  - pointcloud.ply\n")
+            f.write(f"  - images/\n")
+            f.write(f"  - depths/\n")
+            f.write(f"  - cameras.npz\n\n")
+            
+            # Stage 3
+            f.write("-" * 80 + "\n")
+            f.write("STAGE 3: ViewCrafter - Dense View Synthesis\n")
+            f.write("-" * 80 + "\n")
+            stage3 = results.get("stage3", {})
+            all_views = stage3.get("all_views", [])
+            if all_views and len(all_views) > 0:
+                num_frames = all_views[0].shape[0]
+                f.write(f"Total Frames Generated: {num_frames}\n")
+            f.write(f"Input Views: {stage3.get('num_input_views', 'N/A')}\n")
+            f.write(f"Video Length per Clip: {stage3.get('video_length', 'N/A')}\n")
+            f.write(f"Output: stage3_viewcrafter/\n")
+            f.write(f"  - videos/\n")
+            f.write(f"  - frames/\n")
+            f.write(f"  - pointcloud.ply\n")
+            f.write(f"  - cameras.npz\n\n")
+            
+            # Stage 4
+            f.write("-" * 80 + "\n")
+            f.write("STAGE 4: 3D Gaussian Splatting\n")
+            f.write("-" * 80 + "\n")
+            stage4 = results.get("stage4", {})
+            f.write(f"Export Directory: {stage4.get('export_dir', 'N/A')}\n")
+            f.write(f"COLMAP Directory: {stage4.get('colmap_dir', 'N/A')}\n")
+            f.write(f"Number of Images: {stage4.get('num_images', 'N/A')}\n")
+            f.write(f"Number of Points: {stage4.get('num_points', 'N/A')}\n")
+            
+            if "training" in stage4:
+                f.write(f"\nTraining Status: COMPLETED\n")
+                training = stage4["training"]
+                f.write(f"Iterations: {training.get('iterations', 'N/A')}\n")
+                f.write(f"Model Path: {training.get('model_path', 'N/A')}\n")
+                f.write(f"Success: {training.get('success', False)}\n")
+            else:
+                f.write(f"\nTraining Status: NOT PERFORMED (export only)\n")
+            
+            f.write(f"\nOutput: 3dgs/\n")
+            f.write(f"  - images/\n")
+            f.write(f"  - sparse/0/\n")
+            if "training" in stage4:
+                f.write(f"  - output/ (trained model)\n")
+            f.write("\n")
+            
+            # Summary
+            f.write("=" * 80 + "\n")
+            f.write("DIRECTORY STRUCTURE\n")
+            f.write("=" * 80 + "\n")
+            f.write(f"{self.run_dir}/\n")
+            f.write(f"├── PIPELINE_SUMMARY.txt (this file)\n")
+            f.write(f"├── stage1_mvdiffusion/\n")
+            f.write(f"│   ├── view_00.png ~ view_07.png\n")
+            f.write(f"│   ├── cameras.npz\n")
+            f.write(f"│   ├── prompt.txt\n")
+            f.write(f"│   └── metadata.json\n")
+            f.write(f"├── stage2_pointcloud/\n")
+            f.write(f"│   ├── pointcloud.ply\n")
+            f.write(f"│   ├── images/\n")
+            f.write(f"│   ├── depths/\n")
+            f.write(f"│   ├── cameras.npz\n")
+            f.write(f"│   └── metadata.json\n")
+            f.write(f"├── stage3_viewcrafter/\n")
+            f.write(f"│   ├── videos/\n")
+            f.write(f"│   ├── frames/\n")
+            f.write(f"│   ├── pointcloud.ply\n")
+            f.write(f"│   ├── cameras.npz\n")
+            f.write(f"│   └── metadata.json\n")
+            f.write(f"├── stage4_gaussian/\n")
+            f.write(f"│   ├── metadata.json\n")
+            f.write(f"│   └── summary.txt\n")
+            f.write(f"└── 3dgs/\n")
+            f.write(f"    ├── images/\n")
+            f.write(f"    ├── sparse/0/\n")
+            f.write(f"    │   ├── cameras.txt\n")
+            f.write(f"    │   ├── images.txt\n")
+            f.write(f"    │   └── points3D.txt\n")
+            if "training" in stage4:
+                f.write(f"    ├── output/ (trained model)\n")
+                f.write(f"    │   ├── point_cloud/\n")
+                f.write(f"    │   ├── cameras.json\n")
+                f.write(f"    │   └── cfg_args\n")
+            f.write(f"    └── metadata.json\n")
+            f.write("\n")
+            
+            f.write("=" * 80 + "\n")
+            f.write("NEXT STEPS\n")
+            f.write("=" * 80 + "\n")
+            if "training" in stage4:
+                f.write("View the trained model:\n")
+                f.write(f"  cd /root/autodl-tmp/gaussian-splatting\n")
+                f.write(f"  python viewer.py -m {stage4['training']['model_path']}\n")
+            else:
+                f.write("Train the model manually:\n")
+                f.write(f"  cd /root/autodl-tmp/gaussian-splatting\n")
+                f.write(f"  python train.py -s {stage4.get('export_dir', 'N/A')} --iterations 30000\n")
+            f.write("\n")
+        
+        print(f"\n  Saved pipeline summary to {summary_file}")

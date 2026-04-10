@@ -48,7 +48,7 @@ class MVDiffusionStage(BaseStage):
         ckpt_path = self.config.get("checkpoint", "./checkpoints/mvdiffusion/pano.ckpt")
         if os.path.exists(ckpt_path):
             state_dict = torch.load(ckpt_path, map_location="cpu")["state_dict"]
-            self.model.load_state_dict(state_dict, strict=True)
+            self.model.load_state_dict(state_dict, strict=False)
             print(f"Loaded MVDiffusion checkpoint from {ckpt_path}")
         else:
             raise FileNotFoundError(f"MVDiffusion checkpoint not found: {ckpt_path}")

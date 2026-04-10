@@ -33,7 +33,7 @@ Text ──→ MVDiffusion ──→ DUSt3R ──→ ViewCrafter ──→ 3D-G
 | Stage 1 | Text prompt | 8 panoramic images | Correspondence-aware diffusion |
 | Stage 2 | Multi-view images | Point cloud + poses | Calibration-free 3D reconstruction |
 | Stage 3 | Sparse views + point cloud | Dense view sequence | Video diffusion, point cloud rendering |
-| Stage 4 | Dense views + poses | 3D-GS scene | COLMAP format export |
+| Stage 4 | Dense views + poses | 3D-GS scene | COLMAP format export + Optional training |
 
 ## 🛠️ Requirements
 
@@ -131,10 +131,31 @@ wget https://download.europe.naverlabs.com/ComputerVision/DUSt3R/DUSt3R_ViTLarge
 
 ## 🚀 Usage
 
-### Basic usage
+### Basic usage (Export only)
 
 ```bash
 python -m text2gs.run --text "A cozy living room with a fireplace and wooden furniture"
+```
+
+### With 3D-GS Training (Integrated)
+
+```bash
+# Train with default 30000 iterations
+python -m text2gs.run \
+  --text "A modern kitchen with marble countertops" \
+  --train-3dgs
+
+# Custom iterations
+python -m text2gs.run \
+  --text "A beautiful garden" \
+  --train-3dgs \
+  --gs-iterations 50000
+
+# With memory optimization
+python -m text2gs.run \
+  --text "A spacious library" \
+  --train-3dgs \
+  --unload-between-stages
 ```
 
 ### Specify output directory
@@ -142,6 +163,26 @@ python -m text2gs.run --text "A cozy living room with a fireplace and wooden fur
 ```bash
 python -m text2gs.run --text "..." --output ./my_output
 ```
+
+For detailed training guide, see [TRAINING_GUIDE.md](./TRAINING_GUIDE.md).
+
+## 📚 Documentation
+
+- [TRAINING_GUIDE.md](./TRAINING_GUIDE.md) - Complete training guide with examples
+- [OUTPUT_STRUCTURE.md](./OUTPUT_STRUCTURE.md) - Detailed output structure explanation
+- [SAVE_RESULTS_SUMMARY.md](./SAVE_RESULTS_SUMMARY.md) - Result saving features
+- [INTEGRATION_SUMMARY.md](./INTEGRATION_SUMMARY.md) - Integration summary
+- [CHANGELOG.md](./CHANGELOG.md) - Version history and updates
+
+## 🔍 Verify Results
+
+After running the pipeline, verify output completeness:
+
+```bash
+python check_output.py output/TIMESTAMP
+```
+
+This will check all stages and report any missing files.
 
 ## 📁 Project Structure
 
@@ -187,31 +228,19 @@ Results are saved to `output/<timestamp>/`:
 
 ```
 output/20260101_120000/
+├── PIPELINE_SUMMARY.txt        # Complete pipeline summary (NEW)
 ├── stage1_mvdiffusion/         # Stage 1 output
-│   ├── view_00.png ~ view_07.png   # 8 panoramic views
-│   ├── cameras.npz             # Camera parameters
-│   ├── prompt.txt              # Input prompt
-│   └── metadata.json
 ├── stage2_pointcloud/          # Stage 2 output
-│   ├── pointcloud.ply          # Sparse point cloud
-│   ├── images/                 # Input images
-│   ├── depths/                 # Depth maps
-│   ├── cameras.npz             # Optimized camera parameters
-│   └── metadata.json
 ├── stage3_viewcrafter/         # Stage 3 output
-│   ├── videos/                 # Generated videos
-│   ├── frames/                 # All frame images
-│   ├── pointcloud.ply          # Updated point cloud
-│   ├── cameras.npz             # Interpolated camera parameters
-│   └── metadata.json
+├── stage4_gaussian/            # Stage 4 metadata (NEW)
 └── 3dgs/                       # Stage 4 output (COLMAP format)
     ├── images/                 # Training images
     ├── sparse/0/               # COLMAP sparse reconstruction
-    │   ├── cameras.bin
-    │   ├── images.bin
-    │   └── points3D.bin
-    └── colmap_output.txt
+    ├── training_logs/          # Training logs (if training enabled)
+    └── output/                 # Trained model (if training enabled)
 ```
+
+For detailed output structure, see [OUTPUT_STRUCTURE.md](./OUTPUT_STRUCTURE.md).
 
 ## 📚 Citation
 

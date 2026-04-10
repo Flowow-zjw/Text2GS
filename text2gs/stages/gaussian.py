@@ -18,8 +18,23 @@ class GaussianStage(BaseStage):
     
     def __init__(self, config: Dict[str, Any], device: str = "cuda:0"):
         super().__init__(config, device)
-        self.iterations = config.get("iterations", 2000)
-        self.export_only = config.get("export_only", True)
+        self.iterations = config.get("iterations", 7000)  # 默认 7000，可配置
+        self.export_only = config.get("export_only", False)
+        self.test_iterations = [self.iterations]
+        self.save_iterations = [self.iterations]
+        self.checkpoint_iterations = []
+        self.gs_path = config.get("gaussian_splatting_path", "/root/autodl-tmp/gaussian-splatting")
+        
+        # 色彩优化参数
+        self.sh_degree = config.get("sh_degree")  # 球谐函数阶数 (0-3)
+        self.lambda_dssim = config.get("lambda_dssim")  # SSIM 损失权重
+        
+        # 几何优化参数
+        self.opacity_reset_interval = config.get("opacity_reset_interval")  # 透明度重置间隔
+        self.densify_grad_threshold = config.get("densify_grad_threshold")  # 密集化梯度阈值
+        
+        # 点云采样参数
+        self.max_init_points = config.get("max_init_points", 500000)  # 初始点云最大数量（默认50万）
         
     def load_model(self) -> None:
         """3D-GS doesn't need pre-loading"""
@@ -65,11 +80,16 @@ class GaussianStage(BaseStage):
         
         # Optionally train 3D-GS
         if not self.export_only:
-            try:
-                model = self._train_3dgs(output_dir)
-                result["model"] = model
-            except ImportError:
-                print("3D-GS package not found. Please train manually.")
+            print("\n[Training] Starting 3D Gaussian Splatting training...")
+            model_result = self._train_3dgs(output_dir)
+            if model_result:
+                result["training"] = model_result
+                result["trained_model_path"] = model_result["model_path"]
+        else:
+            print("\n[Export Only] Skipping training. Set 'export_only: false' to train.")
+            print(f"To train manually, run:")
+            print(f"  cd {self.gs_path}")
+            print(f"  python train.py -s {output_dir} --iterations {self.iterations}")
         
         return result
     
@@ -90,11 +110,11 @@ class GaussianStage(BaseStage):
         num_input_views = inputs.get("num_input_views", len(imgs))
         video_length = inputs.get("video_length", 25)
         
-        # Create directories
-        sparse_dir = os.path.join(output_dir, "sparse", "0")
+        # Create directories - 3D-GS expects images/ and sparse/0/ at the same level
         images_dir = os.path.join(output_dir, "images")
-        os.makedirs(sparse_dir, exist_ok=True)
+        sparse_dir = os.path.join(output_dir, "sparse", "0")
         os.makedirs(images_dir, exist_ok=True)
+        os.makedirs(sparse_dir, exist_ok=True)
         
         image_names = []
         image_poses = []
@@ -112,20 +132,33 @@ class GaussianStage(BaseStage):
         else:
             pp_np = principal_points
         
-        # DUSt3R image size (512x384)
+        # DUSt3R image size (512x384) - 使用DUSt3R处理后的图像以保持与点云一致
         H_dust3r, W_dust3r = imgs[0].shape[:2]
         cx_dust3r = pp_np[0, 0] if len(pp_np.shape) > 1 else W_dust3r / 2
         cy_dust3r = pp_np[0, 1] if len(pp_np.shape) > 1 else H_dust3r / 2
         
-        # Save original images from MVDiffusion (512x512) - Camera 1
+        # 使用 DUSt3R 处理后的图像（512x384）而不是原始图像（512x512）
+        # 这样可以保持图像与点云的一致性，避免空洞问题
         if original_images is not None:
-            H_orig, W_orig = original_images[0].shape[:2]
-            # Scale focal length for original resolution
-            fx_orig = fx_dust3r * W_orig / W_dust3r
-            cx_orig = cx_dust3r * W_orig / W_dust3r
-            cy_orig = cy_dust3r * H_orig / H_dust3r
+            # 将原始图像 resize 到 DUSt3R 的尺寸
+            from PIL import Image as PILImage
+            import numpy as np
             
-            for i, img in enumerate(original_images):
+            resized_images = []
+            for img in original_images:
+                if isinstance(img, np.ndarray):
+                    pil_img = PILImage.fromarray(img)
+                else:
+                    pil_img = PILImage.fromarray(img.cpu().numpy())
+                
+                # Resize 到 DUSt3R 的尺寸 (512x384)
+                resized = pil_img.resize((W_dust3r, H_dust3r), PILImage.LANCZOS)
+                resized_images.append(np.array(resized))
+            
+            H_orig, W_orig = H_dust3r, W_dust3r
+            fx_orig, cx_orig, cy_orig = fx_dust3r, cx_dust3r, cy_dust3r
+            
+            for i, img in enumerate(resized_images):
                 name = f"orig_{i:04d}.png"
                 image_names.append(name)
                 self._save_image(img, os.path.join(images_dir, name))
@@ -138,7 +171,7 @@ class GaussianStage(BaseStage):
                     pose = c2ws[i]
                 image_poses.append(pose)
         else:
-            H_orig, W_orig = 512, 512
+            H_orig, W_orig = H_dust3r, W_dust3r
             fx_orig, cx_orig, cy_orig = fx_dust3r, cx_dust3r, cy_dust3r
         
         # Save generated views from ViewCrafter (576x1024) - Camera 2
@@ -176,14 +209,15 @@ class GaussianStage(BaseStage):
             H_gen, W_gen = H_dust3r, W_dust3r
             fx_gen, cx_gen, cy_gen = fx_dust3r, cx_dust3r, cy_dust3r
         
-        # Write cameras.txt - two cameras with different resolutions
+        # Write cameras.txt - 使用统一的相机参数（基于DUSt3R的512x384）
         with open(os.path.join(sparse_dir, "cameras.txt"), "w") as f:
             f.write("# Camera list with one line of data per camera:\n")
             f.write("# CAMERA_ID, MODEL, WIDTH, HEIGHT, PARAMS[]\n")
-            # Camera 1: Original images (512x512)
+            # Camera 1: Original images (resized to 512x384 to match DUSt3R)
             f.write(f"1 PINHOLE {W_orig} {H_orig} {fx_orig} {fx_orig} {cx_orig} {cy_orig}\n")
-            # Camera 2: Generated images (576x1024)
-            f.write(f"2 PINHOLE {W_gen} {H_gen} {fx_gen} {fx_gen} {cx_gen} {cy_gen}\n")
+            # Camera 2: Generated images (576x1024 if ViewCrafter was used)
+            if generated_views is not None:
+                f.write(f"2 PINHOLE {W_gen} {H_gen} {fx_gen} {fx_gen} {cx_gen} {cy_gen}\n")
         
         # Write images.txt
         with open(os.path.join(sparse_dir, "images.txt"), "w") as f:
@@ -218,7 +252,7 @@ class GaussianStage(BaseStage):
             f.write("# 3D point list with one line of data per point:\n")
             f.write("# POINT3D_ID, X, Y, Z, R, G, B, ERROR, TRACK[]\n")
             
-            step = max(1, len(all_pts) // 100000)
+            step = max(1, len(all_pts) // self.max_init_points)
             num_saved_points = 0
             for i in range(0, len(all_pts), step):
                 pt = all_pts[i]
@@ -246,7 +280,156 @@ class GaussianStage(BaseStage):
         Image.fromarray(img).save(path)
     
     def _train_3dgs(self, data_dir: str):
-        """Train 3D-GS (requires gaussian-splatting package)"""
-        # This would integrate with official gaussian-splatting
-        # For now, return None
-        return None
+        """Train 3D-GS using official gaussian-splatting"""
+        import subprocess
+        from datetime import datetime
+        
+        # Check if gaussian-splatting exists
+        if not os.path.exists(self.gs_path):
+            print(f"Warning: gaussian-splatting not found at {self.gs_path}")
+            print("Please install it or update the path in the config")
+            return None
+        
+        # Convert to absolute path
+        data_dir = os.path.abspath(data_dir)
+        
+        # Prepare training command
+        train_script = os.path.join(self.gs_path, "train.py")
+        output_model_dir = os.path.join(data_dir, "output")
+        log_dir = os.path.join(data_dir, "training_logs")
+        os.makedirs(log_dir, exist_ok=True)
+        
+        # Log file with timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_file = os.path.join(log_dir, f"training_{timestamp}.log")
+        
+        cmd = [
+            "python", train_script,
+            "-s", data_dir,
+            "-m", output_model_dir,
+            "--iterations", str(self.iterations),
+            "--eval",  # Enable evaluation
+        ]
+        
+        # Add test iterations
+        if self.test_iterations:
+            for it in self.test_iterations:
+                cmd.extend(["--test_iterations", str(it)])
+        
+        # Add save iterations
+        if self.save_iterations:
+            for it in self.save_iterations:
+                cmd.extend(["--save_iterations", str(it)])
+        
+        # Add checkpoint iterations
+        if self.checkpoint_iterations:
+            for it in self.checkpoint_iterations:
+                cmd.extend(["--checkpoint_iterations", str(it)])
+        
+        # 色彩优化参数
+        if self.sh_degree is not None:
+            cmd.extend(["--sh_degree", str(self.sh_degree)])
+        
+        if self.lambda_dssim is not None:
+            cmd.extend(["--lambda_dssim", str(self.lambda_dssim)])
+        
+        # 几何优化参数
+        if self.opacity_reset_interval is not None:
+            cmd.extend(["--opacity_reset_interval", str(self.opacity_reset_interval)])
+        
+        if self.densify_grad_threshold is not None:
+            cmd.extend(["--densify_grad_threshold", str(self.densify_grad_threshold)])
+        
+        print(f"\n{'='*60}")
+        print("Starting 3D Gaussian Splatting Training...")
+        print(f"Source: {data_dir}")
+        print(f"Output: {output_model_dir}")
+        print(f"Iterations: {self.iterations}")
+        if self.sh_degree is not None:
+            print(f"SH Degree: {self.sh_degree}")
+        if self.lambda_dssim is not None:
+            print(f"Lambda DSSIM: {self.lambda_dssim}")
+        if self.opacity_reset_interval is not None:
+            print(f"Opacity Reset Interval: {self.opacity_reset_interval}")
+        print(f"Log File: {log_file}")
+        print(f"Command: {' '.join(cmd)}")
+        print(f"{'='*60}\n")
+        
+        # Save training configuration
+        config_file = os.path.join(log_dir, f"training_config_{timestamp}.txt")
+        with open(config_file, "w") as f:
+            f.write("3D Gaussian Splatting Training Configuration\n")
+            f.write("=" * 60 + "\n\n")
+            f.write(f"Timestamp: {timestamp}\n")
+            f.write(f"Source Directory: {data_dir}\n")
+            f.write(f"Output Directory: {output_model_dir}\n")
+            f.write(f"Iterations: {self.iterations}\n")
+            f.write(f"Test Iterations: {self.test_iterations}\n")
+            f.write(f"Save Iterations: {self.save_iterations}\n")
+            f.write(f"Checkpoint Iterations: {self.checkpoint_iterations}\n")
+            f.write(f"\nCommand:\n{' '.join(cmd)}\n")
+        
+        try:
+            # Run training and capture output
+            with open(log_file, "w") as f:
+                f.write(f"Training started at {timestamp}\n")
+                f.write(f"Command: {' '.join(cmd)}\n")
+                f.write("=" * 60 + "\n\n")
+                f.flush()
+                
+                result = subprocess.run(
+                    cmd,
+                    cwd=self.gs_path,
+                    check=True,
+                    stdout=f,
+                    stderr=subprocess.STDOUT,
+                    text=True
+                )
+            
+            print(f"\n{'='*60}")
+            print("Training completed successfully!")
+            print(f"Model saved to: {output_model_dir}")
+            print(f"Training log: {log_file}")
+            print(f"{'='*60}\n")
+            
+            # Save completion status
+            status_file = os.path.join(log_dir, "training_status.txt")
+            with open(status_file, "w") as f:
+                f.write("Training Status: SUCCESS\n")
+                f.write(f"Completed at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"Model Path: {output_model_dir}\n")
+                f.write(f"Iterations: {self.iterations}\n")
+                f.write(f"Log File: {log_file}\n")
+            
+            return {
+                "model_path": output_model_dir,
+                "iterations": self.iterations,
+                "success": True,
+                "log_file": log_file,
+                "config_file": config_file,
+                "status_file": status_file,
+            }
+            
+        except subprocess.CalledProcessError as e:
+            print(f"\nError during training: {e}")
+            
+            # Save error status
+            status_file = os.path.join(log_dir, "training_status.txt")
+            with open(status_file, "w") as f:
+                f.write("Training Status: FAILED\n")
+                f.write(f"Failed at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"Error: {str(e)}\n")
+                f.write(f"Log File: {log_file}\n")
+            
+            return None
+        except Exception as e:
+            print(f"\nUnexpected error: {e}")
+            
+            # Save error status
+            status_file = os.path.join(log_dir, "training_status.txt")
+            with open(status_file, "w") as f:
+                f.write("Training Status: ERROR\n")
+                f.write(f"Failed at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"Error: {str(e)}\n")
+            
+            return None
