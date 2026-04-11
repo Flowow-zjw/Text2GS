@@ -112,9 +112,11 @@ class Text2GSPipeline:
         if save_intermediate:
             self._save_stage1(stage1_out)
         
-        # Optionally unload to save memory
+        # Unload Stage 1 model before Stage 2 to free memory
         if self.config.get("unload_between_stages", False):
             self._unload_stage("mvdiffusion")
+            torch.cuda.empty_cache()
+            print("  Unloaded Stage 1 model to free memory")
         
         # Stage 2: Point Cloud
         print("\n[Stage 2/4] DUSt3R - Reconstructing point cloud...")
@@ -127,6 +129,13 @@ class Text2GSPipeline:
         
         if save_intermediate:
             self._save_stage2(stage2_out)
+        
+        # Unload Stage 2 model before Stage 3 to free memory
+        if self.config.get("unload_between_stages", False):
+            self._unload_stage("pointcloud")
+            import torch
+            torch.cuda.empty_cache()
+            print("  Unloaded Stage 2 model to free memory")
         
         # Stage 3: ViewCrafter
         print("\n[Stage 3/4] ViewCrafter - Generating dense views...")
@@ -317,7 +326,7 @@ class Text2GSPipeline:
         print(f"  Saved point cloud ({len(pts)} points) to {stage_dir}")
     
     def _save_stage3(self, data: Dict[str, Any]) -> None:
-        """Save Stage 3 outputs: videos, point cloud, all frames"""
+        """Save Stage 3 outputs: videos, reconstructed point cloud, all frames"""
         from dust3r.utils.device import to_numpy
         
         stage_dir = os.path.join(self.run_dir, "stage3_viewcrafter")
@@ -327,7 +336,7 @@ class Text2GSPipeline:
         videos_dir = os.path.join(stage_dir, "videos")
         os.makedirs(videos_dir, exist_ok=True)
         
-        all_views = data["all_views"][0]  # Now it's a single concatenated tensor
+        all_views = data["all_views"][0]  # Concatenated tensor
         frames = (all_views + 1) / 2  # [-1,1] -> [0,1]
         save_video(frames, os.path.join(videos_dir, "generated_views.mp4"))
         
@@ -339,7 +348,7 @@ class Text2GSPipeline:
             frame = ((all_views[j].numpy() + 1) / 2 * 255).astype(np.uint8)
             save_image(frame, os.path.join(frames_dir, f"frame_{j:03d}.png"))
         
-        # Save point cloud
+        # Save reconstructed point cloud (from DUSt3R)
         pts3d = to_numpy(data["pts3d"])
         
         imgs_raw = data["images"]
@@ -351,22 +360,24 @@ class Text2GSPipeline:
         masks = data.get("masks")
         
         if masks is not None:
+            # Convert masks to numpy if they are tensors
+            if isinstance(masks, list):
+                masks = [to_numpy(m) if not isinstance(m, np.ndarray) else m for m in masks]
+            else:
+                masks = to_numpy(masks) if not isinstance(masks, np.ndarray) else masks
+            
             pts = np.concatenate([p[m] for p, m in zip(pts3d, masks)])
             cols = np.concatenate([p[m] for p, m in zip(imgs, masks)])
         else:
             pts = np.concatenate([p.reshape(-1, 3) for p in pts3d])
             cols = np.concatenate([p.reshape(-1, 3) for p in imgs])
         
-        save_pointcloud(pts, cols, os.path.join(stage_dir, "pointcloud.ply"))
+        save_pointcloud(pts, cols, os.path.join(stage_dir, "pointcloud_reconstructed.ply"))
         
-        # Save camera poses (original + interpolated)
+        # Save camera poses (reconstructed from DUSt3R)
         c2ws = data["c2ws"]
         if hasattr(c2ws, 'cpu'):
             c2ws = c2ws.cpu().numpy()
-        
-        c2ws_interp = data.get("c2ws_interp")
-        if c2ws_interp is not None and hasattr(c2ws_interp, 'cpu'):
-            c2ws_interp = c2ws_interp.cpu().numpy()
         
         focals = data["focals"]
         if hasattr(focals, 'cpu'):
@@ -379,27 +390,33 @@ class Text2GSPipeline:
         np.savez(
             os.path.join(stage_dir, "cameras.npz"),
             c2ws=c2ws,
-            c2ws_interp=c2ws_interp,
             focals=focals,
             principal_points=principal_points
         )
         
         # Save metadata
-        num_input_views = data.get("num_input_views", len(imgs))
+        num_input_views = data.get("num_input_views", 8)
         video_length = data.get("video_length", 25)
+        num_sampled = data.get("num_sampled_frames", 0)
+        sampled_indices = data.get("sampled_indices", [])
+        original_indices = data.get("original_frame_indices", [])
         total_frames = all_views.shape[0]
         
         metadata = {
             "num_input_views": num_input_views,
             "video_length": video_length,
-            "total_frames": total_frames,
+            "total_generated_frames": total_frames,
+            "num_sampled_frames": num_sampled,
+            "num_reconstructed_views": len(imgs),
             "num_points": len(pts),
-            "frame_interval_degrees": 360.0 / total_frames if total_frames > 0 else 0
+            "sampled_indices": sampled_indices,
+            "original_frame_indices": original_indices,
+            "workflow": "ViewCrafter interpolation -> Remove duplicates -> Uniform sampling (保留原始帧) -> DUSt3R reconstruction"
         }
         with open(os.path.join(stage_dir, "metadata.json"), "w") as f:
             json.dump(metadata, f, indent=2)
         
-        print(f"  Saved {total_frames} frames (interval: {metadata['frame_interval_degrees']:.1f}°) to {stage_dir}")
+        print(f"  Saved {total_frames} generated frames, {num_sampled} sampled frames, {len(imgs)} reconstructed views to {stage_dir}")
     
     def _save_stage4(self, data: Dict[str, Any]) -> None:
         """Save Stage 4 outputs: metadata and training info"""

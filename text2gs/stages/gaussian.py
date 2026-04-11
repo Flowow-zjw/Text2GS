@@ -174,15 +174,15 @@ class GaussianStage(BaseStage):
             H_orig, W_orig = H_dust3r, W_dust3r
             fx_orig, cx_orig, cy_orig = fx_dust3r, cx_dust3r, cy_dust3r
         
-        # Save generated views from ViewCrafter (576x1024) - Camera 2
+        # Save generated views from ViewCrafter
+        # Resize to 512x384 to match DUSt3R resolution and point cloud
         generated_views = all_views[0] if len(all_views) > 0 else None
         
+        # Initialize H_gen, W_gen for metadata (will be updated if generated views exist)
+        H_gen, W_gen = H_dust3r, W_dust3r
+        
         if generated_views is not None and c2ws_interp is not None:
-            H_gen, W_gen = generated_views.shape[1], generated_views.shape[2]
-            # Scale focal length for generated resolution
-            fx_gen = fx_dust3r * W_gen / W_dust3r
-            cx_gen = cx_dust3r * W_gen / W_dust3r
-            cy_gen = cy_dust3r * H_gen / H_dust3r
+            from PIL import Image as PILImage
             
             if hasattr(c2ws_interp, 'cpu'):
                 c2ws_interp_np = c2ws_interp.cpu().numpy()
@@ -196,28 +196,27 @@ class GaussianStage(BaseStage):
                 else:
                     frame_np = ((frame + 1) / 2 * 255).astype(np.uint8)
                 
+                # Resize to DUSt3R resolution (512x384) for consistency
+                pil_img = PILImage.fromarray(frame_np)
+                resized = pil_img.resize((W_dust3r, H_dust3r), PILImage.LANCZOS)
+                resized_np = np.array(resized)
+                
                 name = f"gen_{frame_idx:04d}.png"
                 image_names.append(name)
-                Image.fromarray(frame_np).save(os.path.join(images_dir, name))
-                image_camera_ids.append(2)  # Camera 2 for generated
+                PILImage.fromarray(resized_np).save(os.path.join(images_dir, name))
+                image_camera_ids.append(1)  # Use Camera 1 (same as original images)
                 
                 if frame_idx < len(c2ws_interp_np):
                     image_poses.append(c2ws_interp_np[frame_idx])
                 else:
                     image_poses.append(c2ws_interp_np[-1])
-        else:
-            H_gen, W_gen = H_dust3r, W_dust3r
-            fx_gen, cx_gen, cy_gen = fx_dust3r, cx_dust3r, cy_dust3r
         
         # Write cameras.txt - 使用统一的相机参数（基于DUSt3R的512x384）
         with open(os.path.join(sparse_dir, "cameras.txt"), "w") as f:
             f.write("# Camera list with one line of data per camera:\n")
             f.write("# CAMERA_ID, MODEL, WIDTH, HEIGHT, PARAMS[]\n")
-            # Camera 1: Original images (resized to 512x384 to match DUSt3R)
+            # Single camera model: All images resized to 512x384 to match DUSt3R
             f.write(f"1 PINHOLE {W_orig} {H_orig} {fx_orig} {fx_orig} {cx_orig} {cy_orig}\n")
-            # Camera 2: Generated images (576x1024 if ViewCrafter was used)
-            if generated_views is not None:
-                f.write(f"2 PINHOLE {W_gen} {H_gen} {fx_gen} {fx_gen} {cx_gen} {cy_gen}\n")
         
         # Write images.txt
         with open(os.path.join(sparse_dir, "images.txt"), "w") as f:

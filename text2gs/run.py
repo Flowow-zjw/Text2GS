@@ -36,7 +36,7 @@ def parse_args():
                         help="Text prompt for generation")
     
     # Config
-    parser.add_argument("--config", type=str, default=None,
+    parser.add_argument("--config", type=str, default="./configs/default.yaml",
                         help="Path to config YAML file")
     
     # Output

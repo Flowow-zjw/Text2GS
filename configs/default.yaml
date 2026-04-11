@@ -7,7 +7,7 @@ device: "cuda:0"
 output_dir: "./output"
 
 # Memory optimization
-unload_between_stages: false
+unload_between_stages: true
 
 # External paths (absolute paths)
 paths:
@@ -41,8 +41,22 @@ viewcrafter:
   guidance_scale: 7.5
   min_conf_thr: 3.0
   bg_trd: 0.2
+  
+  # 采样配置（二选一）
+  # 方式1: 指定采样帧数（推荐）
+  num_sampled_frames: 16  # 采样30帧（不包括8个原始帧），总共38帧用于DUSt3R重建
+  
+  # 方式2: 指定采样间隔（如果num_sampled_frames为null则使用此方式）
+  # sample_rate: 6  # 每6帧采样1帧
+  
   checkpoint: "/root/autodl-tmp/Text2GS/checkpoints/viewcrafter/model_sparse.ckpt"
   config: "/root/autodl-tmp/Text2GS/extern/ViewCrafter/configs/inference_pvd_1024.yaml"
+  # DUSt3R reconstruction parameters
+  batch_size: 1
+  niter: 300
+  lr: 0.01
+  schedule: "linear"
+  dust3r_checkpoint: "/root/autodl-tmp/Text2GS/checkpoints/dust3r/DUSt3R_ViTLarge_BaseDecoder_512_dpt.pth"
 
 # Stage 4: 3D Gaussian Splatting
 gaussian:
