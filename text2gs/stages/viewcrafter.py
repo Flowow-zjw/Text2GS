@@ -174,6 +174,9 @@ class ViewCrafterStage(BaseStage):
         imgs = np.array(inputs["images"])
         num_input_views = len(imgs)
         
+        # Save a copy of imgs for later use (before deletion)
+        imgs_for_keyframes = imgs.copy()
+        
         print(f"  Interpolating between {num_input_views} views...")
         
         # Step 1: Generate interpolated camera trajectory
@@ -209,13 +212,15 @@ class ViewCrafterStage(BaseStage):
         scaled_focals = focals * torch.tensor([[scale_w, scale_h]], device=focals.device)
         scaled_principal_points = principal_points * torch.tensor([[scale_w, scale_h]], device=principal_points.device)
         
-        # Replace key frames with original high-res images
-        if original_images is not None:
-            img_ori_list = self._prepare_original_images(original_images)
+        # Replace key frames with Stage 2 DUSt3R processed images
+        # 使用Stage 2的输出而不是MVDiffusion原图
+        # 优点：与点云完全一致，避免分辨率不匹配
+        if imgs_for_keyframes is not None and len(imgs_for_keyframes) > 0:
+            img_stage2_list = self._prepare_stage2_images(imgs_for_keyframes)
             for i in range(num_input_views):
                 frame_idx = i * (self.video_length - 1)
                 if frame_idx < render_results.shape[0]:
-                    render_results[frame_idx] = img_ori_list[i]
+                    render_results[frame_idx] = img_stage2_list[i]
         
         # Step 3: Run ViewCrafter diffusion on each clip
         all_diffusion_results = []
@@ -511,7 +516,8 @@ class ViewCrafterStage(BaseStage):
         scene.min_conf_thr = float(scene.conf_trf(torch.tensor(self.min_conf_thr)))
         masks = scene.get_masks()
         
-        return {
+        # Extract all needed data before deleting scene
+        result = {
             "pts3d": pts3d,
             "images": np.array(scene.imgs),
             "c2ws": c2ws,
@@ -519,10 +525,48 @@ class ViewCrafterStage(BaseStage):
             "principal_points": principal_points,
             "depths": depths,
             "masks": masks,
-            "scene": scene,
             "dust3r_images": images,
             "image_shape": images[0]["true_shape"],
         }
+        
+        # Delete scene to free memory immediately
+        del scene
+        torch.cuda.empty_cache()
+        
+        return result
+    
+    def _prepare_stage2_images(self, stage2_images: np.ndarray) -> List[torch.Tensor]:
+        """
+        Prepare Stage 2 DUSt3R processed images for key frames
+        
+        Args:
+            stage2_images: Stage 2输出的图像 (N, 384, 512, 3) [0, 1]
+            
+        Returns:
+            List of tensors resized to ViewCrafter resolution
+        """
+        img_list = []
+        for img in stage2_images:
+            # 确保是[0, 1]范围
+            if img.max() > 1:
+                img = img / 255.0
+            
+            # 转换为tensor
+            img_tensor = torch.from_numpy(img).float().to(self.device)
+            
+            # Resize到ViewCrafter分辨率 (384, 512) → (576, 1024)
+            img_tensor = img_tensor.permute(2, 0, 1).unsqueeze(0)  # (1, 3, 384, 512)
+            img_tensor = F.interpolate(
+                img_tensor,
+                size=(self.target_height, self.target_width),  # (576, 1024)
+                mode="bilinear",
+                align_corners=False
+            )
+            img_tensor = img_tensor.squeeze(0).permute(1, 2, 0)  # (576, 1024, 3)
+            
+            img_list.append(img_tensor)
+        
+        return img_list
     
     def _prepare_original_images(self, original_images: np.ndarray) -> List[torch.Tensor]:
         """Prepare original high-res images for key frames"""
@@ -650,3 +694,18 @@ class ViewCrafterStage(BaseStage):
         torch.cuda.empty_cache()
         
         return result
+    
+    def unload_model(self) -> None:
+        """Unload both ViewCrafter and DUSt3R models to free memory"""
+        if self.diffusion_model is not None:
+            del self.diffusion_model
+            self.diffusion_model = None
+            print("  Unloaded ViewCrafter diffusion model")
+        
+        if self.dust3r_model is not None:
+            del self.dust3r_model
+            self.dust3r_model = None
+            print("  Unloaded DUSt3R model")
+        
+        torch.cuda.empty_cache()
+        print("  Freed Stage 3 memory")

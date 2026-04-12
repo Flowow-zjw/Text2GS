@@ -80,9 +80,13 @@ class Text2GSPipeline:
     def _unload_stage(self, name: str):
         """Unload a stage to free memory"""
         if name in self._loaded_stages:
+            print(f"  Unloading {name} stage...")
             self.stages[name].unload_model()
             self._loaded_stages.discard(name)
             torch.cuda.empty_cache()
+            print(f"  {name} stage unloaded successfully")
+        else:
+            print(f"  Warning: {name} not in loaded stages, skipping unload")
     
     def run(self, text: str, save_intermediate: bool = True) -> Dict[str, Any]:
         """
@@ -340,13 +344,16 @@ class Text2GSPipeline:
         frames = (all_views + 1) / 2  # [-1,1] -> [0,1]
         save_video(frames, os.path.join(videos_dir, "generated_views.mp4"))
         
-        # Save all generated frames as images
-        frames_dir = os.path.join(stage_dir, "frames")
-        os.makedirs(frames_dir, exist_ok=True)
-        
-        for j in range(all_views.shape[0]):
-            frame = ((all_views[j].numpy() + 1) / 2 * 255).astype(np.uint8)
-            save_image(frame, os.path.join(frames_dir, f"frame_{j:03d}.png"))
+        # Save sampled frames used for reconstruction (not all 169 frames to save disk space)
+        sampled_indices = data.get("sampled_indices", [])
+        if sampled_indices:
+            frames_dir = os.path.join(stage_dir, "sampled_frames")
+            os.makedirs(frames_dir, exist_ok=True)
+            
+            for idx in sampled_indices:
+                frame = ((all_views[idx].numpy() + 1) / 2 * 255).astype(np.uint8)
+                save_image(frame, os.path.join(frames_dir, f"frame_{idx:03d}.png"))
+            print(f"  Saved {len(sampled_indices)} sampled frames (instead of all {all_views.shape[0]} frames to save space)")
         
         # Save reconstructed point cloud (from DUSt3R)
         pts3d = to_numpy(data["pts3d"])
@@ -373,6 +380,13 @@ class Text2GSPipeline:
             cols = np.concatenate([p.reshape(-1, 3) for p in imgs])
         
         save_pointcloud(pts, cols, os.path.join(stage_dir, "pointcloud_reconstructed.ply"))
+        
+        # Save reconstructed images used for training
+        reconstructed_images_dir = os.path.join(stage_dir, "reconstructed_images")
+        os.makedirs(reconstructed_images_dir, exist_ok=True)
+        for i, img in enumerate(imgs):
+            save_image(img, os.path.join(reconstructed_images_dir, f"image_{i:04d}.png"))
+        print(f"  Saved {len(imgs)} reconstructed images to {reconstructed_images_dir}")
         
         # Save camera poses (reconstructed from DUSt3R)
         c2ws = data["c2ws"]
@@ -416,7 +430,7 @@ class Text2GSPipeline:
         with open(os.path.join(stage_dir, "metadata.json"), "w") as f:
             json.dump(metadata, f, indent=2)
         
-        print(f"  Saved {total_frames} generated frames, {num_sampled} sampled frames, {len(imgs)} reconstructed views to {stage_dir}")
+        print(f"  Saved {total_frames} total frames, {len(sampled_indices)} sampled frames, {len(imgs)} reconstructed images to {stage_dir}")
     
     def _save_stage4(self, data: Dict[str, Any]) -> None:
         """Save Stage 4 outputs: metadata and training info"""

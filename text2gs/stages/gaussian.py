@@ -93,24 +93,32 @@ class GaussianStage(BaseStage):
         
         return result
     
+    def _to_numpy(self, data):
+        """Convert tensor/list to numpy array (replaces dust3r.utils.device.to_numpy)"""
+        if isinstance(data, np.ndarray):
+            return data
+        elif isinstance(data, list):
+            return [self._to_numpy(item) for item in data]
+        elif hasattr(data, 'cpu'):
+            return data.cpu().numpy()
+        elif hasattr(data, 'numpy'):
+            return data.numpy()
+        else:
+            return np.array(data)
+    
     def _export_colmap(self, inputs: Dict[str, Any], output_dir: str) -> Dict[str, Any]:
-        """Export data in COLMAP format with both original and generated images"""
-        from dust3r.utils.device import to_numpy
+        """Export data in COLMAP format using Stage 3 reconstructed images"""
         
         pts3d = inputs["pts3d"]
-        imgs = inputs["images"]  # DUSt3R processed images
+        imgs = inputs["images"]  # Stage 3 DUSt3R重建的24张图像
         c2ws = inputs["c2ws"]
         focals = inputs["focals"]
         principal_points = inputs["principal_points"]
-        all_views = inputs["all_views"]
-        original_images = inputs.get("original_images")  # MVDiffusion original 512x512
         
-        # Get interpolated camera poses if available
-        c2ws_interp = inputs.get("c2ws_interp")
-        num_input_views = inputs.get("num_input_views", len(imgs))
-        video_length = inputs.get("video_length", 25)
+        # 不再使用original_images和all_views
+        # 直接使用Stage 3 DUSt3R重建的24张图像
         
-        # Create directories - 3D-GS expects images/ and sparse/0/ at the same level
+        # Create directories
         images_dir = os.path.join(output_dir, "images")
         sparse_dir = os.path.join(output_dir, "sparse", "0")
         os.makedirs(images_dir, exist_ok=True)
@@ -118,7 +126,7 @@ class GaussianStage(BaseStage):
         
         image_names = []
         image_poses = []
-        image_camera_ids = []  # Track which camera each image uses
+        image_camera_ids = []
         
         # Get focal length and principal point from DUSt3R
         if hasattr(focals, 'cpu'):
@@ -132,91 +140,32 @@ class GaussianStage(BaseStage):
         else:
             pp_np = principal_points
         
-        # DUSt3R image size (512x384) - 使用DUSt3R处理后的图像以保持与点云一致
+        # DUSt3R image size (512x384)
         H_dust3r, W_dust3r = imgs[0].shape[:2]
         cx_dust3r = pp_np[0, 0] if len(pp_np.shape) > 1 else W_dust3r / 2
         cy_dust3r = pp_np[0, 1] if len(pp_np.shape) > 1 else H_dust3r / 2
         
-        # 使用 DUSt3R 处理后的图像（512x384）而不是原始图像（512x512）
-        # 这样可以保持图像与点云的一致性，避免空洞问题
-        if original_images is not None:
-            # 将原始图像 resize 到 DUSt3R 的尺寸
-            from PIL import Image as PILImage
-            import numpy as np
+        # 保存Stage 3重建的所有图像（24张）
+        print(f"  Saving {len(imgs)} images from Stage 3 DUSt3R reconstruction...")
+        for i, img in enumerate(imgs):
+            name = f"image_{i:04d}.png"
+            image_names.append(name)
+            self._save_image(img, os.path.join(images_dir, name))
+            image_camera_ids.append(1)  # 统一使用Camera 1
             
-            resized_images = []
-            for img in original_images:
-                if isinstance(img, np.ndarray):
-                    pil_img = PILImage.fromarray(img)
-                else:
-                    pil_img = PILImage.fromarray(img.cpu().numpy())
-                
-                # Resize 到 DUSt3R 的尺寸 (512x384)
-                resized = pil_img.resize((W_dust3r, H_dust3r), PILImage.LANCZOS)
-                resized_images.append(np.array(resized))
-            
-            H_orig, W_orig = H_dust3r, W_dust3r
-            fx_orig, cx_orig, cy_orig = fx_dust3r, cx_dust3r, cy_dust3r
-            
-            for i, img in enumerate(resized_images):
-                name = f"orig_{i:04d}.png"
-                image_names.append(name)
-                self._save_image(img, os.path.join(images_dir, name))
-                image_camera_ids.append(1)  # Camera 1 for original
-                
-                # Use original pose
-                if hasattr(c2ws, 'cpu'):
-                    pose = c2ws[i].cpu().numpy()
-                else:
-                    pose = c2ws[i]
-                image_poses.append(pose)
-        else:
-            H_orig, W_orig = H_dust3r, W_dust3r
-            fx_orig, cx_orig, cy_orig = fx_dust3r, cx_dust3r, cy_dust3r
-        
-        # Save generated views from ViewCrafter
-        # Resize to 512x384 to match DUSt3R resolution and point cloud
-        generated_views = all_views[0] if len(all_views) > 0 else None
-        
-        # Initialize H_gen, W_gen for metadata (will be updated if generated views exist)
-        H_gen, W_gen = H_dust3r, W_dust3r
-        
-        if generated_views is not None and c2ws_interp is not None:
-            from PIL import Image as PILImage
-            
-            if hasattr(c2ws_interp, 'cpu'):
-                c2ws_interp_np = c2ws_interp.cpu().numpy()
+            # 使用Stage 3重建的位姿
+            if hasattr(c2ws, 'cpu'):
+                pose = c2ws[i].cpu().numpy()
             else:
-                c2ws_interp_np = c2ws_interp
-            
-            for frame_idx in range(generated_views.shape[0]):
-                frame = generated_views[frame_idx]
-                if hasattr(frame, 'cpu'):
-                    frame_np = ((frame.cpu().numpy() + 1) / 2 * 255).astype(np.uint8)
-                else:
-                    frame_np = ((frame + 1) / 2 * 255).astype(np.uint8)
-                
-                # Resize to DUSt3R resolution (512x384) for consistency
-                pil_img = PILImage.fromarray(frame_np)
-                resized = pil_img.resize((W_dust3r, H_dust3r), PILImage.LANCZOS)
-                resized_np = np.array(resized)
-                
-                name = f"gen_{frame_idx:04d}.png"
-                image_names.append(name)
-                PILImage.fromarray(resized_np).save(os.path.join(images_dir, name))
-                image_camera_ids.append(1)  # Use Camera 1 (same as original images)
-                
-                if frame_idx < len(c2ws_interp_np):
-                    image_poses.append(c2ws_interp_np[frame_idx])
-                else:
-                    image_poses.append(c2ws_interp_np[-1])
+                pose = c2ws[i]
+            image_poses.append(pose)
         
         # Write cameras.txt - 使用统一的相机参数（基于DUSt3R的512x384）
         with open(os.path.join(sparse_dir, "cameras.txt"), "w") as f:
             f.write("# Camera list with one line of data per camera:\n")
             f.write("# CAMERA_ID, MODEL, WIDTH, HEIGHT, PARAMS[]\n")
-            # Single camera model: All images resized to 512x384 to match DUSt3R
-            f.write(f"1 PINHOLE {W_orig} {H_orig} {fx_orig} {fx_orig} {cx_orig} {cy_orig}\n")
+            # Single camera model: All images are 512x384 from DUSt3R
+            f.write(f"1 PINHOLE {W_dust3r} {H_dust3r} {fx_dust3r} {fx_dust3r} {cx_dust3r} {cy_dust3r}\n")
         
         # Write images.txt
         with open(os.path.join(sparse_dir, "images.txt"), "w") as f:
@@ -237,12 +186,12 @@ class GaussianStage(BaseStage):
                 f.write("\n")
         
         # Write points3D.txt
-        pts3d_np = to_numpy(pts3d)
+        pts3d_np = self._to_numpy(pts3d)
         
         if isinstance(imgs, list):
-            imgs_np = [to_numpy(img) if not isinstance(img, np.ndarray) else img for img in imgs]
+            imgs_np = [self._to_numpy(img) if not isinstance(img, np.ndarray) else img for img in imgs]
         else:
-            imgs_np = imgs if isinstance(imgs, np.ndarray) else to_numpy(imgs)
+            imgs_np = imgs if isinstance(imgs, np.ndarray) else self._to_numpy(imgs)
         
         all_pts = np.concatenate([p.reshape(-1, 3) for p in pts3d_np])
         all_cols = np.concatenate([p.reshape(-1, 3) for p in imgs_np])
@@ -262,12 +211,12 @@ class GaussianStage(BaseStage):
                 f.write(f"{i+1} {pt[0]} {pt[1]} {pt[2]} {r} {g} {b} 0\n")
                 num_saved_points += 1
         
-        print(f"  Exported {len(image_names)} images ({num_input_views} orig + {len(image_names) - num_input_views} gen) and {num_saved_points} points to {output_dir}")
+        print(f"  Exported {len(image_names)} images and {num_saved_points} points to {output_dir}")
         
         return {
             "num_images": len(image_names),
             "num_points": num_saved_points,
-            "resolution": [H_gen, W_gen]
+            "resolution": [H_dust3r, W_dust3r]
         }
     
     def _save_image(self, img: np.ndarray, path: str) -> None:
