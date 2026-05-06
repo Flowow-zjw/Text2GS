@@ -137,7 +137,6 @@ class Text2GSPipeline:
         # Unload Stage 2 model before Stage 3 to free memory
         if self.config.get("unload_between_stages", False):
             self._unload_stage("pointcloud")
-            import torch
             torch.cuda.empty_cache()
             print("  Unloaded Stage 2 model to free memory")
         

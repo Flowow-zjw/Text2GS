@@ -1,4 +1,5 @@
-# Text2GS Default Configuration
+# Text2GS Configuration - Use All Frames Mode
+# 使用所有生成的帧进行DUSt3R重建（约169帧）
 
 # Device
 device: "cuda:0"
@@ -34,27 +35,25 @@ pointcloud:
   min_conf_thr: 3.0
   checkpoint: "/root/autodl-tmp/Text2GS/checkpoints/dust3r/DUSt3R_ViTLarge_BaseDecoder_512_dpt.pth"
 
-# Stage 3: ViewCrafter
+# Stage 3: ViewCrafter - 使用所有帧模式
 viewcrafter:
-  video_length: 25
+  video_length: 10
   ddim_steps: 50
   guidance_scale: 7.5
   min_conf_thr: 3.0
   bg_trd: 0.2
   
-  # 重建模式选择
-  use_all_frames: false  # 设为true使用所有生成的帧（约169帧），false则使用采样策略
-  reconstruction_batch_size: 30  # 批量重建时每批的图像数量（仅use_all_frames=true时有效）
+  # ===== 关键配置：使用所有帧 =====
+  use_all_frames: true  # 启用所有帧重建
+  reconstruction_batch_size: 30  # 每批处理30张图像（可根据显存调整：24GB显存建议20-30）
   
-  # 采样配置（仅use_all_frames=false时有效）
-  # 方式1: 指定采样帧数（推荐）
-  num_sampled_frames: 16  # 采样30帧（不包括8个原始帧），总共38帧用于DUSt3R重建
-  
-  # 方式2: 指定采样间隔（如果num_sampled_frames为null则使用此方式）
-  # sample_rate: 6  # 每6帧采样1帧
+  # 以下采样配置在use_all_frames=true时会被忽略
+  num_sampled_frames: null
+  sample_rate: 6
   
   checkpoint: "/root/autodl-tmp/Text2GS/checkpoints/viewcrafter/model_sparse.ckpt"
   config: "/root/autodl-tmp/Text2GS/extern/ViewCrafter/configs/inference_pvd_1024.yaml"
+  
   # DUSt3R reconstruction parameters
   batch_size: 1
   niter: 300
@@ -64,7 +63,15 @@ viewcrafter:
 
 # Stage 4: 3D Gaussian Splatting
 gaussian:
-  export_only: false  # Set to false to train 3D-GS directly
-  iterations: 5000  # 减少到5000步以避免后期densification显存不足
-  opacity_reset_interval: 100000  # 禁用透明度重置，避免删除有效点导致空洞
-  max_init_points: 200000  # 初始点云数量（减少到20万以节省显存）
+  export_only: false
+  iterations: 7000
+  opacity_reset_interval: 100000
+  max_init_points: 300000  # 增加到30万，因为有更多的输入图像
+
+# 说明：
+# 1. use_all_frames=true 会使用ViewCrafter生成的所有约169帧
+# 2. reconstruction_batch_size 控制每批处理的图像数量
+#    - 24GB显存：建议20-30
+#    - 48GB显存：建议40-50
+# 3. 批次间通过重叠区域的相机位姿进行Procrustes对齐，确保在同一坐标系
+# 4. 预计重建时间：约15-30分钟（取决于显存和batch size）
